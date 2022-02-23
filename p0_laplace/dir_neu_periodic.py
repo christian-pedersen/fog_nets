@@ -29,7 +29,10 @@ def solve_poisson(boundaries, f, dir_data, neu_data, periodic_data):
 
     ds = Measure('ds', domain=mesh, subdomain_data=boundaries)
 
-    hVof = CellCenterDistance(mesh)    
+    # FIXME: this doesn't compute what we need on periodic
+    hVof = CellCenterDistance(mesh)
+    print(np.sort(hVof.vector().get_local()))
+    
     a = (avg((1/hVof))*inner(jump(u), jump(v))*dS
          +sum((1/hVof)*inner(u, v)*ds(tag) for tag in dir_data))
 
