@@ -2,6 +2,8 @@
 *.vtu
 *.xml
 *.msh
+*~
+
 __pycache__/
 results/
 _results/
