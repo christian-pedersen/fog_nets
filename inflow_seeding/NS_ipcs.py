@@ -5,12 +5,16 @@ import matplotlib.pyplot as plt
 
 # constants
 
+radius = 0.15
+x_dist = 0.2
+
+x_center = (5+2)*radius + x_dist
 
 rho = Constant(1.0)
 nu = Constant(0.001)
 mu = rho*nu
 U_0 = 1.0
-dt = 0.00005
+dt = 0.0005
 end_time = 20
 
 seed_chance = np.asarray([0,1]) # 50% chance of seeding per time step
@@ -18,15 +22,14 @@ seed_chance = np.asarray([0,1]) # 50% chance of seeding per time step
 folder = '_results/U=%g/'%U_0
 
 # create mesh and boundaries
-mesh = Mesh('../mesh/test_mesh.xml')
+mesh = Mesh('mesh/mesh.xml')
 x = mesh.coordinates()
 L, H = max(x[:,0]), max(x[:,1])
 
 
-
 class Periodic_sides(SubDomain):
     def inside(self, x, on_boundary):
-        return near(x[1], 0) and on_boundary #
+        return x[1] < 1e-8 and on_boundary #
 
     def map(self, x, y):
         y[0] = x[0]
@@ -44,23 +47,31 @@ class Outlet(SubDomain):
     def inside(self, x, on_boundary):
         return near(x[0], L) and on_boundary
 
-class Cylinders(SubDomain):
+class Interior_Cylinders(SubDomain):
     def inside(self, x, on_boundary):
-        return x[0] > 0 and x[0] < (L)  and x[1] > 0 and x[1] < H and on_boundary
+        return x[0] > DOLFIN_EPS and x[0] < L and x[1] > DOLFIN_EPS and x[1] < (H  -0.1) and on_boundary
+
+class Boundary_Cylinders(SubDomain):
+    def inside(self, x, on_boundary):
+        return (x[0]-x_center)*(x[0]-x_center) + x[1]*x[1] - radius*radius < 1e-08  or (x[0]-x_center)*(x[0]-x_center) + (x[1]-H)*(x[1]-H) - radius*radius < 1e-8  and on_boundary
+
 
 boundaries = MeshFunction("size_t", mesh, mesh.topology().dim()-1, 0)
 boundaries.set_all(0)
 
-cylinders = Cylinders()
+
+cylinders = Interior_Cylinders()
 cylinders.mark(boundaries, 4)
+cylinders = Boundary_Cylinders()
+cylinders.mark(boundaries, 4)
+periodic_sides = Periodic_sides()
+periodic_sides.mark(boundaries, 3)
 top = Top()
 top.mark(boundaries, 0)
 inlet = Inlet()
 inlet.mark(boundaries, 1)
 outlet = Outlet()
 outlet.mark(boundaries, 2)
-periodic_sides = Periodic_sides()
-periodic_sides.mark(boundaries, 3)
 
 domain = File('domain.pvd')
 domain << boundaries
@@ -165,6 +176,7 @@ while t < end_time +DOLFIN_EPS:
     [bc.apply(A3, b3) for bc in velocityBC]
     solve(A3, u1.vector(), b3)
 
+    
     lp.step(u1, dt=dt)
     if np.random.choice(seed_chance) != 0:
         lp.add_particles(np.asarray([[0, H*np.random.uniform(0.001, 0.999)]]))
@@ -176,9 +188,8 @@ while t < end_time +DOLFIN_EPS:
     fig.canvas.draw()
     plt.pause(0.0001)
 
-
     fig.clf()
-
+    
 
     if pix == 10:
         u1.rename('u', 'f')
