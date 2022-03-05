@@ -1,0 +1,17 @@
+SetFactory("OpenCASCADE");
+Rectangle(1) = {0, 0, 0, 1.850000, 1.000000};
+Circle(5) = {0.750000, 0.250000, 0, 0.150000, 0, 2*Pi}; Line Loop(5) = {5}; Plane Surface(5) = {5};
+Circle(6) = {0.750000, 0.750000, 0, 0.150000, 0, 2*Pi}; Line Loop(6) = {6}; Plane Surface(6) = {6};
+Circle(7) = {1.250000, 0.000000, 0, 0.150000, 0, 2*Pi}; Line Loop(7) = {7}; Plane Surface(7) = {7};
+Circle(8) = {1.250000, 0.500000, 0, 0.150000, 0, 2*Pi}; Line Loop(8) = {8}; Plane Surface(8) = {8};
+Circle(9) = {1.250000, 1.000000, 0, 0.150000, 0, 2*Pi}; Line Loop(9) = {9}; Plane Surface(9) = {9};
+BooleanDifference(10) = { Surface{1}; Delete; }{ Surface{5, 6, 7, 8, 9}; Delete; };
+Point(30) = {0.600000, 0.250000, 0}; Point(31) = {0.750000, 0.400000, 0}; Point(32) = {0.750000, 0.100000, 0};
+Point(33) = {0.600000, 0.750000, 0}; Point(34) = {0.750000, 0.900000, 0}; Point(35) = {0.750000, 0.600000, 0};
+Point(36) = {1.100000, 0.500000, 0}; Point(37) = {1.250000, 0.650000, 0}; Point(38) = {1.250000, 0.350000, 0};
+Point(39) = {1.250000, 0.150000, 0};
+Point(40) = {1.250000, 0.850000, 0};
+Characteristic Length {3, 4, 7, 8} = 0.030000;
+Characteristic Length {1, 2, 5, 6, 9, 10, 11, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40} = 0.015000;
+Periodic Line {4} = {2} Translate {0, 1.000000, 0};
+Periodic Line {6} = {8} Translate {0, 1.000000, 0};
