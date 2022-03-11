@@ -15,8 +15,8 @@ y_dist = float(arg[2])
 
 scale = min([radius, x_dist, y_dist])
 
-lm = scale / 5.
-lc = scale / 10.
+lm = scale / 7.5
+lc = scale / 15.
 
 if x_dist < 0.1*radius:
     x_dist = 0.1*radius
@@ -27,7 +27,7 @@ geo_file = open('mesh.geo', 'w')
 
 geo_file.write('SetFactory("OpenCASCADE");\n')
 
-geo_file.write('Rectangle(1) = {0, 0, 0, %f, %f};\n' % ((11*radius + x_dist), (4*radius+2*y_dist)))
+geo_file.write('Rectangle(1) = {0, 0, 0, %f, %f};\n' % ((40*radius + x_dist), (4*radius+2*y_dist)))
 
 xcenter, ycenter = [], []
 

@@ -2,22 +2,31 @@ from dolfin import *
 import numpy as np
 from LagrangianParticles import LagrangianParticles
 import matplotlib.pyplot as plt
+from boundary_collisions import remove_particles
 
 # constants
 
-radius = 0.15
-x_dist = 0.2
+particles_cylinder = 0
+particles_outlet = 0
+
+
+radius = 0.1
+x_dist = 0.3
+y_dist = 0.2
+droplet_radius = radius / 100.
 
 x_center = (5+2)*radius + x_dist
+xc_first = 5*radius
+
 
 rho = Constant(1.0)
 nu = Constant(0.001)
 mu = rho*nu
 U_0 = 1.0
-dt = 0.0005
+dt = 0.00025
 end_time = 20
 
-seed_chance = np.asarray([0,1]) # 50% chance of seeding per time step
+seed_chance = np.asarray([0,0, 1]) # 50% chance of seeding per time step
 
 folder = '_results/U=%g/'%U_0
 
@@ -25,6 +34,16 @@ folder = '_results/U=%g/'%U_0
 mesh = Mesh('mesh/mesh.xml')
 x = mesh.coordinates()
 L, H = max(x[:,0]), max(x[:,1])
+
+print(L, H)
+
+predicates_cylinder = (lambda x: (x[1]-(y_dist*0.5+radius))*(x[1]-(y_dist*0.5+radius)) + (x[0]-xc_first)*(x[0]-xc_first) - radius**2 < droplet_radius
+                            or (x[1]-(y_dist*1.5+3*radius))*(x[1]-(y_dist*1.5+3*radius)) + (x[0]-xc_first)*(x[0]-xc_first) - radius**2 < droplet_radius
+                            or x[1]*x[1] + (x[0]-x_center)*(x[0]-x_center) - radius**2 < droplet_radius
+                            or (x[1]-(y_dist+2*radius))*(x[1]-(y_dist+2*radius)) + (x[0]-x_center)*(x[0]-x_center) - radius**2 < droplet_radius
+                            or (x[1]-(2*y_dist+4*radius))*(x[1]-(2*y_dist+4*radius)) + (x[0]-x_center)*(x[0]-x_center) - radius**2 < droplet_radius, )
+
+predicates_outlet = (lambda x: x[0] > 0.95*L, )
 
 
 class Periodic_sides(SubDomain):
@@ -49,7 +68,7 @@ class Outlet(SubDomain):
 
 class Interior_Cylinders(SubDomain):
     def inside(self, x, on_boundary):
-        return x[0] > DOLFIN_EPS and x[0] < L and x[1] > DOLFIN_EPS and x[1] < (H  -0.1) and on_boundary
+        return x[0] > DOLFIN_EPS and x[0] < L and x[1] > 1e-02 and x[1] < (H-1e-02) and on_boundary
 
 class Boundary_Cylinders(SubDomain):
     def inside(self, x, on_boundary):
@@ -75,8 +94,6 @@ outlet.mark(boundaries, 2)
 
 domain = File('domain.pvd')
 domain << boundaries
-#plot(boundaries, interactive=True)
-
 
 
 # function spaces and functions
@@ -152,11 +169,16 @@ u_.parameters['flush_output'] = True
 p_.parameters['flush_output'] = True
 
 
-pix = 0
+pix = 1
 
 step = 0
 fig = plt.figure()
 plt.ion()
+
+fig_no  = 1
+
+
+
 
 while t < end_time +DOLFIN_EPS:
     print('calculation progress:',(t-dt)/end_time*100,'%')
@@ -176,29 +198,55 @@ while t < end_time +DOLFIN_EPS:
     [bc.apply(A3, b3) for bc in velocityBC]
     solve(A3, u1.vector(), b3)
 
-    
+
     lp.step(u1, dt=dt)
     if np.random.choice(seed_chance) != 0:
         lp.add_particles(np.asarray([[0, H*np.random.uniform(0.001, 0.999)]]))
     step += 1
-    print(lp.total_number_of_particles(), '<<< particles')
 
-    lp.scatter(fig)
-    fig.suptitle('At step %d' % step)
-    fig.canvas.draw()
-    plt.pause(0.0001)
+    lp, diff = remove_particles(lp, predicates_cylinder)
+    particles_cylinder += diff
+    lp, diff = remove_particles(lp, predicates_outlet)
+    particles_outlet += diff
+    print('number of particles:\n cylinder = %g, outlet = %g' % (particles_cylinder, particles_outlet))
 
-    fig.clf()
-    
 
     if pix == 10:
         u1.rename('u', 'f')
         u_.write(u1, t)
         p1.rename('p', 'f')
         p_.write(p1, t)
+
+        lp.scatter(fig)
+        fig.suptitle('time = %.4f' % t)
+        ax2 = fig.gca()
+        circle1 = plt.Circle((xc_first, y_dist*0.5+radius), radius, color='g')
+        circle2 = plt.Circle((xc_first, y_dist*1.5+3*radius), radius, color='g')
+        circle3 = plt.Circle((x_center, 0), radius, color='g')
+        circle4 = plt.Circle((x_center, 0.5*H), radius, color='g')
+        circle5 = plt.Circle((x_center, H), radius, color='g')
+
+        ax2.add_patch(circle1)
+        ax2.add_patch(circle2)
+        ax2.add_patch(circle3)
+        ax2.add_patch(circle4)
+        ax2.add_patch(circle5)
+        #fig.canvas.draw()
+        #plt.pause(0.0001)
+
+        ax2.axis('square')
+        ax2.set_xlim([0, 0.95*L])
+        ax2.set_ylim([0, H])
+        ax2.axis([0, 0.95*L, 0, H])
+
+        fig.savefig('img/particles%05d.png'% fig_no)
+        fig.clf()
+        fig_no += 1
         pix = 0
     pix += 1
     t += dt
+
+    #fig.clf()
 
     u0.assign(u1)
     p0.assign(p1)

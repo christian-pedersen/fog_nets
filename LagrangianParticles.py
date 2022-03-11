@@ -23,10 +23,11 @@ comm = pyMPI.COMM_WORLD
 __UINT32_MAX__ = np.iinfo('uint32').max
 
 class Particle:
-    __slots__ = ['position', 'properties']
+    __slots__ = ['position', 'prev_position', 'properties']
     'Lagrangian particle with position and some other passive properties.'
     def __init__(self, x):
         self.position = x
+        self.prev_position = np.nan*np.ones_like(x)  # NaN are to be used as a flag
         self.properties = {}
 
     def send(self, dest):
@@ -98,7 +99,7 @@ class CellParticleMap(dict):
 
     def total_number_of_particles(self):
         'Total number of particles in all cells of the map.'
-        return sum(map(len, self.itervalues()))
+        return sum(map(len, iter(self.values())))
 
 
 class LagrangianParticles:
@@ -108,7 +109,7 @@ class LagrangianParticles:
 
         self.V = V
         self.mesh = V.mesh()
-        self.mesh.init(2, 2)  # Cell-cell connectivity for neighbors of cell
+        self.mesh.init(*(self.mesh.topology().dim(), )*2)  # Cell-cell connectivity for neighbors of cell
         self.tree = self.mesh.bounding_box_tree()  # Tree for isection comput.
 
         # Allocate some variables used to look up the velocity
@@ -122,7 +123,10 @@ class LagrangianParticles:
 
         self.element = V.dolfin_element()
         self.num_tensor_entries = 1
-        for i in range(self.element.value_rank()):
+
+        rank = len(V.ufl_element().value_shape())
+
+        for i in range(rank):
             self.num_tensor_entries *= self.element.value_dimension(i)
         # For VectorFunctionSpace CG1 this is 3
         self.coefficients = np.zeros(self.element.space_dimension())
@@ -136,8 +140,8 @@ class LagrangianParticles:
         # Allocate some MPI stuff
         self.num_processes = comm.Get_size()
         self.myrank = comm.Get_rank()
-        self.all_processes = range(self.num_processes)
-        self.other_processes = range(self.num_processes)
+        self.all_processes = list(range(self.num_processes))
+        self.other_processes = list(range(self.num_processes))
         self.other_processes.remove(self.myrank)
         self.my_escaped_particles = np.zeros(1, dtype='I')
         self.tot_escaped_particles = np.zeros(self.num_processes, dtype='I')
@@ -147,7 +151,7 @@ class LagrangianParticles:
 
     def __iter__(self):
         '''Iterate over all particles.'''
-        for cwp in self.particle_map.itervalues():
+        for cwp in self.particle_map.values():
             for particle in cwp.particles:
                 yield particle
 
@@ -160,10 +164,10 @@ class LagrangianParticles:
         if properties_d is not None:
             n = len(list_of_particles)
             assert all(len(sub_list) == n
-                       for sub_list in properties_d.itervalues())
+                       for sub_list in properties_d.values())
             # Dictionary that will be used to feed properties of single
             # particles
-            properties = properties_d.keys()
+            properties = list(properties_d.keys())
             particle_properties = dict((key, 0) for key in properties)
 
             has_properties = True
@@ -203,26 +207,47 @@ class LagrangianParticles:
                 print('There are %d duplicit particles' % n_duplicit)
 
     def step(self, u, dt):
+        import math
         'Move particles by forward Euler x += u*dt'
         start = df.Timer('shift')
-        for cwp in self.particle_map.itervalues():
+        for cwp in self.particle_map.values():
             # Restrict once per cell
-            u.restrict(self.coefficients,
-                       self.element,
-                       cwp,
-                       cwp.get_vertex_coordinates(),
-                       cwp)
+            self.coefficients[:] = u.restrict(self.element, cwp)
             for particle in cwp.particles:
-                x = particle.position
-                # Compute velocity at position x
-                self.element.evaluate_basis_all(self.basis_matrix,
-                                                x,
-                                                cwp.get_vertex_coordinates(),
-                                                cwp.orientation())
-                x[:] = x[:] + dt*np.dot(self.coefficients, self.basis_matrix)[:]
+                x = particle.position # Compute velocity at position x
+                cell_vtx = cwp.get_vertex_coordinates()
+                cell_orient = cwp.orientation()
+
+                for i, row in enumerate(self.basis_matrix):
+                    row[:] = self.element.evaluate_basis(i, x, cell_vtx, cell_orient)
+
+
+                if math.isnan(particle.prev_position[:][0]) == True or math.isnan(particle.prev_position[:][1]) == True:
+                    # Remember the previous one
+                    particle.prev_position[:] = 1*x
+                    # Update to new
+                    x[:] = x[:] + dt*np.dot(self.coefficients, self.basis_matrix)[:]
+                else:
+                    fiber_radius = 0.1
+                    droplet_radius = 0.001#fiber_radius / 100.
+                    viscosity = 0.001
+                    rho = 1.
+                    x0 = particle.prev_position[:]
+                    particle.prev_position[:] = 1*x
+                    prefactor = 6*np.pi*viscosity*droplet_radius*dt / (4./3*np.pi*droplet_radius**3*rho)
+                    x[:] = ( x[:]*(2 - prefactor) - x0 - prefactor*dt*np.dot(self.coefficients, self.basis_matrix)[:] ) / (1 - prefactor)
+
+                H = 0.8
+                if x[1] < 0:
+                    x[1] = H - x[1]
+                    particle.prev_position[1] = H - particle.prev_position[1]
+                elif x[1] > H:
+                    x[1] -= H
+                    particle.prev_position[1] -= H
+
         # Recompute the map
         stop_shift = start.stop()
-        start =df.Timer('relocate')
+        start = df.Timer('relocate')
         info = self.relocate()
         stop_reloc = start.stop()
         # We return computation time per process
@@ -234,7 +259,7 @@ class LagrangianParticles:
         # Map such that map[old_cell] = [(new_cell, particle_id), ...]
         # Ie new destination of particles formerly in old_cell
         new_cell_map = defaultdict(list)
-        for cwp in p_map.itervalues():
+        for cwp in p_map.values():
             for i, particle in enumerate(cwp.particles):
                 point = df.Point(*particle.position)
                 # Search only if particle moved outside original cell
@@ -255,7 +280,7 @@ class LagrangianParticles:
         # Rebuild locally the particles that end up on the process. Some
         # have cell_id == -1, i.e. they are on other process
         list_of_escaped_particles = []
-        for old_cell_id, new_data in new_cell_map.iteritems():
+        for old_cell_id, new_data in new_cell_map.items():
             # We iterate in reverse becasue normal order would remove some
             # particle this shifts the whole list!
             for (new_cell_id, i) in sorted(new_data,
@@ -320,14 +345,14 @@ class LagrangianParticles:
 
         # Slaves should send to master
         if self.myrank > 0:
-            for cwp in p_map.itervalues():
+            for cwp in p_map.values():
                 for p in cwp.particles:
                     p.send(0)
         else:
             # Receive on master
             received = defaultdict(list)
             received[0] = [copy.copy(p.position)
-                           for cwp in p_map.itervalues()
+                           for cwp in p_map.values()
                            for p in cwp.particles]
             for proc in self.other_processes:
                 # Receive all_particles[proc]
@@ -345,12 +370,19 @@ class LagrangianParticles:
                 if len(particles) > 0:
                     xy = np.array(particles)
 
+                    color = np.array(scalarMap.to_rgba(proc))
+                    color = np.tile(color, len(xy[::skip, 0]))
+                    color = color.reshape((-1, 4))
+
+                    #ax.scatter(xy[::skip, 0], xy[::skip, 1],
+                    #           label='%d' % proc,
+                    #           c=color,
+                    #           edgecolor='none')
                     ax.scatter(xy[::skip, 0], xy[::skip, 1],
-                               label='%d' % proc,
-                               c=scalarMap.to_rgba(proc),
+                               c=color,
                                edgecolor='none')
-            ax.legend(loc='best')
-            ax.axis([0, 1, 0, 1])
+            #ax.legend(loc='best')
+            #ax.axis([0, 1, 0, 1])
 
     def bar(self, fig):
         'Bar plot of particle distribution.'
